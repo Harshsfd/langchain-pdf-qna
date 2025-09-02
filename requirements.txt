@@ -1,0 +1,8 @@
+python-dotenv
+PyPDF2
+pdf2image
+pytesseract
+langchain
+langchain-community
+faiss-cpu
+openai
