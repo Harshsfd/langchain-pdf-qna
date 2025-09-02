@@ -2,10 +2,11 @@ import os
 import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_groq import ChatGroq, GroqEmbeddings
+from langchain_groq import ChatGroq
 from langchain.vectorstores import FAISS
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
+from langchain.embeddings import HuggingFaceEmbeddings
 
 # -----------------------------
 # Streamlit Page Setup
@@ -47,13 +48,9 @@ if uploaded_files:
     )
     chunks = text_splitter.split_text(text)
 
-    # Create embeddings and vector database
-    if groq_api_key:
-        embeddings = GroqEmbeddings(model="text-embedding-3-small", groq_api_key=groq_api_key)
-        vector_db = FAISS.from_texts(chunks, embedding=embeddings)
-    else:
-        vector_db = None
-        st.warning("⚠️ Please enter your Groq API Key in the sidebar to enable question answering.")
+    # HuggingFace embeddings (local free model)
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    vector_db = FAISS.from_texts(chunks, embedding=embeddings)
 
 # -----------------------------
 # Chat Interface
@@ -63,7 +60,7 @@ user_question = st.text_input("Your question:")
 
 if user_question:
     if groq_api_key and uploaded_files:
-        # Initialize LLM
+        # Initialize Groq LLM
         llm = ChatGroq(
             groq_api_key=groq_api_key,
             model="llama-3.1-8b-instant"
