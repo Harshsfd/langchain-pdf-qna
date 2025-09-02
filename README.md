@@ -1,17 +1,17 @@
 # 📄 LangChain PDF QnA  
 
 A powerful **PDF Question Answering Chatbot** built with **LangChain, Sentence Transformers, and FAISS**.  
-It allows you to upload any PDF and ask natural language questions, getting context-aware answers instantly. 🚀  
+Upload any PDF and ask natural language questions to get accurate, context-aware answers instantly. 🚀  
 
 ---
 
 ## ✨ Features  
-- 📑 Extracts text from **PDF files**  
-- 🔍 Splits large documents into **manageable chunks**  
-- 🧠 Uses **Sentence Transformers embeddings** for vector representation  
-- 📂 Stores embeddings with **FAISS (Vector Database)**  
-- 🤖 Leverages **LangChain** for question answering  
-- ⚡ Fast & accurate results without re-reading the whole document  
+- 📑 Extracts text from **PDF documents**  
+- 🔍 Splits text into **manageable chunks**  
+- 🧠 Generates embeddings with **Sentence Transformers**  
+- 📂 Stores embeddings using **FAISS Vector DB**  
+- 🤖 Answers queries using **LangChain pipeline**  
+- ⚡ Fast & scalable QnA system  
 
 ---
 
@@ -26,9 +26,18 @@ It allows you to upload any PDF and ask natural language questions, getting cont
 
 ---
 
-## 📂 Project Structure
+## 📂 Project Structure  
 
-langchain_project/ │── main.py              # Entry point of the project │── requirements.txt     # Project dependencies │── .env                 # API keys (not uploaded to GitHub) │── README.md            # Project documentation │── .gitignore           # Ignore unnecessary files
+```
+
+langchain\_project/
+│── main.py              # Main script to run the chatbot
+│── requirements.txt     # Dependencies list
+│── .env                 # Environment variables (API Keys)
+│── README.md            # Documentation
+│── .gitignore           # Ignored files
+
+````
 
 ---
 
@@ -38,80 +47,80 @@ langchain_project/ │── main.py              # Entry point of the project �
 ```bash
 git clone https://github.com/Harshsfd/langchain-pdf-qna.git
 cd langchain-pdf-qna
+````
 
-2️⃣ Create and activate a virtual environment
+2️⃣ Create & activate virtual environment
 
+```bash
 python3 -m venv .venv
 source .venv/bin/activate   # Linux/Mac
 .venv\Scripts\activate      # Windows
+```
 
 3️⃣ Install dependencies
 
+```bash
 pip install -r requirements.txt
+```
 
-4️⃣ Setup environment variables in .env
+4️⃣ Configure environment variables in `.env`
 
+```
 OPENAI_API_KEY=your_openai_api_key
-
+```
 
 ---
 
-▶️ Usage
+## ▶️ Usage
 
-Run the main script:
+Run the chatbot:
 
+```bash
 python main.py
+```
 
-Then upload a PDF file and start asking questions like:
+Ask questions like:
 
-"What is the summary of this document?"
-
-"Explain section 2 in simple words"
-
-
-
----
-
-📌 Requirements
-
-See requirements.txt
-
+* *"Summarize this PDF"*
+* *"What is covered in section 3?"*
+* *"Explain the key points in simple words"*
 
 ---
 
-🚀 Future Improvements
+## 📌 Requirements
 
-[ ] Web UI with Streamlit/Gradio
-
-[ ] Multi-PDF Support
-
-[ ] Support for Local LLMs (Llama, Mistral)
-
-[ ] Summarization & Keyword extraction
-
-
+See [`requirements.txt`](requirements.txt)
 
 ---
 
-🤝 Contributing
+## 🚀 Future Scope
 
-Contributions are welcome! Please fork this repo and submit a pull request.
-
-
----
-
-📜 License
-
-This project is licensed under the MIT License.
-
+* [ ] Web UI with **Streamlit/Gradio**
+* [ ] Multi-PDF Support
+* [ ] Summarization & Keyword extraction
+* [ ] Support for local LLMs (Llama, Mistral, etc.)
 
 ---
 
-👤 Author
+## 🤝 Contributing
 
-Harsh Bhardwaj
+Contributions are welcome! Please fork this repo and create a pull request.
 
-📧 Email: harshbhardwajsfd@gmail.com
-🌐 Portfolio: harshbhardwaj-portfolio.vercel.app
-💼 LinkedIn: linkedin.com/in/harshsfd
-🐙 GitHub: github.com/Harshsfd
+---
+
+## 📜 License
+
+This project is licensed under the **MIT License**.
+
+---
+
+## 👤 Author
+
+**Harsh Bhardwaj**
+
+* 📧 [harshbhardwajsfd@gmail.com](mailto:harshbhardwajsfd@gmail.com)
+* 🌐 [Portfolio](https://harshbhardwaj-portfolio.vercel.app)
+* 💼 [LinkedIn](https://www.linkedin.com/in/harshsfd)
+* 🐙 [GitHub](https://github.com/Harshsfd)
+
+````
