@@ -1,5 +1,5 @@
 """
-main.py — Streamlit PDF QnA (next-level)
+main.py — Streamlit PDF QnA (Groq API version)
 
 Features:
 - Multi-PDF upload
@@ -9,7 +9,7 @@ Features:
 - FAISS vector store (persistent)
 - ConversationalRetrievalChain (LangChain) + ConversationBufferMemory
 - Download chat as .txt
-- Simple controls for chunk size, overlap, model, and DB folder
+- Controls for chunk size, overlap, model, and DB folder
 """
 
 import os
@@ -21,14 +21,14 @@ from typing import List
 import streamlit as st
 from PyPDF2 import PdfReader
 
-# LangChain imports (UPDATED)
+# LangChain imports
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
 from langchain.chains import ConversationalRetrievalChain
-from langchain_openai import OpenAI
 from langchain.memory import ConversationBufferMemory
+from langchain_groq import ChatGroq
 
 # Optional OCR support
 try:
@@ -38,17 +38,14 @@ try:
 except Exception:
     OCR_AVAILABLE = False
 
+
 # ---------- Helpers ----------
 
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     """Extract text using PyPDF2. If too little text found and OCR is available, fallback to OCR."""
     text = ""
-    try:
-        bio = io.BytesIO(pdf_bytes)
-        reader = PdfReader(bio)
-    except Exception:
-        bio = io.BytesIO(pdf_bytes)
-        reader = PdfReader(bio)
+    bio = io.BytesIO(pdf_bytes)
+    reader = PdfReader(bio)
 
     for page in reader.pages:
         try:
@@ -67,6 +64,7 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
 
     return text
 
+
 def ocr_pdf_bytes(pdf_bytes: bytes) -> str:
     """Convert PDF bytes to images and run Tesseract OCR on each page."""
     images = convert_from_bytes(pdf_bytes)
@@ -76,8 +74,10 @@ def ocr_pdf_bytes(pdf_bytes: bytes) -> str:
         full_text += page_text + "\n"
     return full_text
 
+
 def docs_from_texts(texts: List[str], metadatas: List[dict]) -> List[Document]:
     return [Document(page_content=t, metadata=m) for t, m in zip(texts, metadatas)]
+
 
 def build_vector_store(docs: List[Document], embedding_model_name: str = "all-MiniLM-L6-v2", persist_directory: str = "faiss_db") -> FAISS:
     """Create or update FAISS vector store from documents (and persist to disk)."""
@@ -97,6 +97,7 @@ def build_vector_store(docs: List[Document], embedding_model_name: str = "all-Mi
     db.save_local(persist_directory)
     return db
 
+
 def load_retriever_if_exists(persist_directory: str = "faiss_db", embedding_model_name: str = "all-MiniLM-L6-v2", k: int = 5):
     embed = SentenceTransformerEmbeddings(model_name=embedding_model_name)
     if os.path.exists(persist_directory) and os.listdir(persist_directory):
@@ -107,17 +108,18 @@ def load_retriever_if_exists(persist_directory: str = "faiss_db", embedding_mode
             return None, None
     return None, None
 
+
 # ---------- Streamlit UI ----------
 
-st.set_page_config(page_title="PDF QnA — Streamlit", layout="wide")
-st.title("📚 PDF QnA — Streamlit (multi-PDF, vector DB, conversation)")
+st.set_page_config(page_title="PDF QnA — Groq API", layout="wide")
+st.title("📚 PDF QnA — Streamlit (Groq API, multi-PDF, vector DB, conversation)")
 
 st.sidebar.header("Settings")
-openai_api_key = st.sidebar.text_input("OpenAI API Key (put here or set env)", type="password")
-if openai_api_key:
-    os.environ["OPENAI_API_KEY"] = openai_api_key
+groq_api_key = st.sidebar.text_input("Groq API Key (put here or set env)", type="password")
+if groq_api_key:
+    os.environ["GROQ_API_KEY"] = groq_api_key
 
-model_label = st.sidebar.selectbox("LLM (configured)", ["openai"], index=0)
+model_label = st.sidebar.selectbox("LLM Model", ["llama3-8b-8192", "mixtral-8x7b-32768"], index=0)
 chunk_size = st.sidebar.number_input("Chunk size", min_value=200, max_value=3000, value=1000, step=100)
 overlap = st.sidebar.number_input("Chunk overlap", min_value=0, max_value=1000, value=200, step=10)
 embedding_model = st.sidebar.text_input("Sentence-Transformers model", value="all-MiniLM-L6-v2")
@@ -187,7 +189,7 @@ if retriever is None:
     st.info("No vector DB available yet. Build DB first.")
 else:
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-    llm = OpenAI(temperature=0.0)
+    llm = ChatGroq(api_key=groq_api_key, model=model_label, temperature=0.0)
 
     chain = ConversationalRetrievalChain.from_llm(llm=llm, retriever=retriever, memory=memory)
 
@@ -240,4 +242,4 @@ else:
                 st.download_button(label="Download chat", data=txt, file_name="pdf_qna_chat.txt", mime="text/plain")
 
 st.markdown("---")
-st.markdown("**Notes:**\n- For scanned PDFs you need `poppler` and `tesseract` installed. On Ubuntu: `sudo apt install poppler-utils tesseract-ocr`.\n- On Streamlit Cloud, OCR may not work because system deps are missing.\n- Add your `OPENAI_API_KEY` in Streamlit Secrets or in the sidebar.")
+st.markdown("**Notes:**\n- For scanned PDFs you need `poppler` and `tesseract` installed. On Ubuntu: `sudo apt install poppler-utils tesseract-ocr`.\n- On Streamlit Cloud, OCR may not work because system deps are missing.\n- Add your `GROQ_API_KEY` in Streamlit Secrets or in the sidebar.")
