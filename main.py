@@ -21,13 +21,13 @@ from typing import List
 import streamlit as st
 from PyPDF2 import PdfReader
 
-# LangChain imports
+# LangChain imports (UPDATED)
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import SentenceTransformerEmbeddings
-from langchain.vectorstores import FAISS
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
 from langchain.chains import ConversationalRetrievalChain
-from langchain.llms import OpenAI
+from langchain_openai import OpenAI
 from langchain.memory import ConversationBufferMemory
 
 # Optional OCR support
@@ -41,16 +41,12 @@ except Exception:
 # ---------- Helpers ----------
 
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
-    """
-    Extract text using PyPDF2. If extracted text is very short and OCR is available,
-    use OCR fallback.
-    """
+    """Extract text using PyPDF2. If too little text found and OCR is available, fallback to OCR."""
     text = ""
     try:
         bio = io.BytesIO(pdf_bytes)
         reader = PdfReader(bio)
     except Exception:
-        # fallback: try again with BytesIO
         bio = io.BytesIO(pdf_bytes)
         reader = PdfReader(bio)
 
@@ -61,7 +57,6 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
             page_text = ""
         text += page_text + "\n"
 
-    # If very little text found and OCR libs available, try OCR
     if (len(text.strip()) < 30) and OCR_AVAILABLE:
         try:
             ocr_text = ocr_pdf_bytes(pdf_bytes)
@@ -88,19 +83,16 @@ def build_vector_store(docs: List[Document], embedding_model_name: str = "all-Mi
     """Create or update FAISS vector store from documents (and persist to disk)."""
     embed = SentenceTransformerEmbeddings(model_name=embedding_model_name)
     os.makedirs(persist_directory, exist_ok=True)
-    # Try to load existing DB and add docs
     try:
         if os.listdir(persist_directory):
-            db = FAISS.load_local(persist_directory, embed)
+            db = FAISS.load_local(persist_directory, embed, allow_dangerous_deserialization=True)
             if docs:
                 db.add_documents(docs)
                 db.save_local(persist_directory)
             return db
     except Exception:
-        # fallback to creating new
         pass
 
-    # create new DB
     db = FAISS.from_documents(docs, embedding=embed)
     db.save_local(persist_directory)
     return db
@@ -109,7 +101,7 @@ def load_retriever_if_exists(persist_directory: str = "faiss_db", embedding_mode
     embed = SentenceTransformerEmbeddings(model_name=embedding_model_name)
     if os.path.exists(persist_directory) and os.listdir(persist_directory):
         try:
-            db = FAISS.load_local(persist_directory, embed)
+            db = FAISS.load_local(persist_directory, embed, allow_dangerous_deserialization=True)
             return db.as_retriever(search_kwargs={"k": k}), db
         except Exception:
             return None, None
@@ -136,7 +128,7 @@ st.sidebar.markdown("---")
 if OCR_AVAILABLE:
     st.sidebar.success("OCR (pdf2image + pytesseract) available")
 else:
-    st.sidebar.info("OCR libraries not available. Scanned PDFs will not be processed without Poppler + Tesseract installed.")
+    st.sidebar.info("OCR not available. Scanned PDFs need Poppler + Tesseract installed.")
 
 st.markdown("### 1) Upload PDFs and build/update vector DB")
 uploaded_files = st.file_uploader("Upload one or more PDFs", accept_multiple_files=True, type=["pdf"])
@@ -153,20 +145,17 @@ st.markdown("### 2) Chat with your documents")
 question = st.text_input("Ask a question from uploaded PDFs")
 ask_button = st.button("Ask")
 
-# Session-state defaults
 if "chat_history" not in st.session_state:
     st.session_state["chat_history"] = []
 if "chat_id" not in st.session_state:
     st.session_state["chat_id"] = str(uuid.uuid4())
 
-# Build DB logic
 if build_button:
     if not uploaded_files:
         st.warning("Please upload at least one PDF.")
     else:
         with st.spinner("Processing PDFs and building vector DB..."):
-            all_texts = []
-            metadatas = []
+            all_texts, metadatas = [], []
             for f in uploaded_files:
                 try:
                     raw = f.read()
@@ -175,7 +164,7 @@ if build_button:
                     st.error(f"Failed to read {f.name}: {e}")
                     continue
                 if not text.strip():
-                    st.warning(f"No text extracted from {f.name} (maybe scanned PDF or OCR not configured).")
+                    st.warning(f"No text extracted from {f.name}.")
                 splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
                 chunks = splitter.split_text(text)
                 for i, chunk in enumerate(chunks):
@@ -183,7 +172,7 @@ if build_button:
                     all_texts.append(chunk)
                     metadatas.append(meta)
             if not all_texts:
-                st.error("No text extracted from uploaded PDFs. Check OCR availability for scanned PDFs.")
+                st.error("No text extracted from uploaded PDFs.")
             else:
                 docs = docs_from_texts(all_texts, metadatas)
                 try:
@@ -192,24 +181,16 @@ if build_button:
                 except Exception as e:
                     st.error(f"Failed building vector DB: {e}")
 
-# Load retriever if exists
 retriever, db = load_retriever_if_exists(persist_directory=faiss_folder, embedding_model_name=embedding_model, k=search_k)
 
 if retriever is None:
     st.info("No vector DB available yet. Build DB first.")
 else:
-    # Set up memory + LLM
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-    if model_label == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            st.warning("OpenAI API key not found. Put it in the sidebar or set OPENAI_API_KEY as environment variable.")
-        llm = OpenAI(temperature=0.0)
-    else:
-        llm = OpenAI(temperature=0.0)
+    llm = OpenAI(temperature=0.0)
 
     chain = ConversationalRetrievalChain.from_llm(llm=llm, retriever=retriever, memory=memory)
 
-    # Controls
     cols = st.columns([3, 1])
     with cols[1]:
         if st.button("Clear chat history"):
@@ -224,7 +205,6 @@ else:
                 except Exception as e:
                     st.error(f"Error deleting DB: {e}")
 
-    # Ask question
     if ask_button and question:
         with st.spinner("Searching and generating answer..."):
             try:
@@ -234,14 +214,12 @@ else:
             except Exception as e:
                 st.error(f"Error during retrieval/LLM call: {e}")
 
-    # Display chat history
     st.markdown("#### Chat history")
     for qa in reversed(st.session_state["chat_history"]):
         st.markdown(f"**Q:** {qa['question']}")
         st.markdown(f"**A:** {qa['answer']}")
         st.markdown("---")
 
-    # Side tools
     with st.sidebar:
         st.markdown("### Tools")
         if st.button("Show DB files"):
@@ -262,4 +240,4 @@ else:
                 st.download_button(label="Download chat", data=txt, file_name="pdf_qna_chat.txt", mime="text/plain")
 
 st.markdown("---")
-st.markdown("**Notes:**\n- For scanned PDFs you need `poppler` (system) and `tesseract` (system) installed plus the `pdf2image`/`pytesseract` Python packages. On Ubuntu: `sudo apt install poppler-utils tesseract-ocr`.\n- If deploying to Streamlit Cloud, system packages may not be available — in that case use text PDFs or deploy on a VPS.\n- Add your `OPENAI_API_KEY` in Streamlit Secrets (or paste in sidebar).")
+st.markdown("**Notes:**\n- For scanned PDFs you need `poppler` and `tesseract` installed. On Ubuntu: `sudo apt install poppler-utils tesseract-ocr`.\n- On Streamlit Cloud, OCR may not work because system deps are missing.\n- Add your `OPENAI_API_KEY` in Streamlit Secrets or in the sidebar.")
