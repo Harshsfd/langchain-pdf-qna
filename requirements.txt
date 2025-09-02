@@ -2,7 +2,7 @@ streamlit
 pypdf2
 langchain
 langchain-community
-langchain-openai
+langchain-groq
 faiss-cpu
 sentence-transformers
 pdf2image
