@@ -1,10 +1,6 @@
 streamlit
-pypdf2
 langchain
 langchain-community
 langchain-groq
 faiss-cpu
-sentence-transformers
-pdf2image
-pytesseract
-python-dotenv
+PyPDF2
