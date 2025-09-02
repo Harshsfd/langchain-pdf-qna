@@ -1,12 +1,13 @@
+streamlit
 python-dotenv
 PyPDF2
 pdf2image
 pytesseract
 langchain
-langchain-community
 sentence-transformers
 faiss-cpu
 openai
 tiktoken
 torch
 pillow
+transformers
