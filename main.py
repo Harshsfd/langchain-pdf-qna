@@ -1,37 +1,36 @@
 """
-Streamlit PDF QnA — Groq API (multi-PDF, vector DB, conversational)
+Streamlit PDF QnA — lightweight persistent vectors (numpy) + Groq LLM
 
 Features:
 - Multi-PDF upload
-- Smart PDF processing: PyPDF2 for text PDFs; fallback to OCR (pdf2image + pytesseract)
-- Chunking with CharacterTextSplitter (configurable)
-- Embeddings via sentence-transformers (default: all-MiniLM-L6-v2)
-- FAISS vector store (persistent to disk)
-- ConversationalRetrievalChain (LangChain) + ConversationBufferMemory
-- Show source snippets (optional)
-- Download chat as .txt
-- Controls for chunk size, overlap, model, and DB folder
+- PyPDF2 text extraction, optional OCR fallback (pdf2image + pytesseract)
+- Chunking (CharacterTextSplitter)
+- Embeddings using sentence-transformers (all-MiniLM-L6-v2)
+- Persistent vector store: saves vectors (vectors.npy) + metadatas (metadatas.json)
+- NearestNeighbors retrieval (scikit-learn)
+- ConversationalRetrievalChain from LangChain using a simple retriever wrapper
+- Chat history, download .txt
 """
-
 import os
 import io
 import uuid
+import json
 import shutil
-from typing import List, Tuple
+from typing import List, Dict, Tuple
 
 import streamlit as st
 from PyPDF2 import PdfReader
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from sklearn.neighbors import NearestNeighbors
 
-# LangChain imports
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain_groq import ChatGroq
 
-# ---------- Optional OCR support ----------
+# Optional OCR
 try:
     from pdf2image import convert_from_bytes
     import pytesseract
@@ -39,11 +38,12 @@ try:
 except Exception:
     OCR_AVAILABLE = False
 
+# ---------- Config ----------
+EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
+DEFAULT_DB_FOLDER = "vector_db_np"
 
 # ---------- Helpers ----------
-
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
-    """Extract text via PyPDF2; if very little text found and OCR available, fallback to OCR."""
     text = ""
     bio = io.BytesIO(pdf_bytes)
     try:
@@ -69,9 +69,7 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
 
     return text or ""
 
-
 def ocr_pdf_bytes(pdf_bytes: bytes) -> str:
-    """Convert PDF bytes to images and run Tesseract OCR on each page."""
     images = convert_from_bytes(pdf_bytes)
     full_text = ""
     for img in images:
@@ -79,98 +77,122 @@ def ocr_pdf_bytes(pdf_bytes: bytes) -> str:
         full_text += page_text + "\n"
     return full_text
 
-
 def docs_from_texts(texts: List[str], metadatas: List[dict]) -> List[Document]:
     return [Document(page_content=t, metadata=m) for t, m in zip(texts, metadatas)]
 
+# ---------- Simple persistent vector DB using numpy + json ----------
+class NumpyVectorDB:
+    def __init__(self, folder: str = DEFAULT_DB_FOLDER, embed_model: SentenceTransformer = None):
+        self.folder = folder
+        os.makedirs(self.folder, exist_ok=True)
+        self.vectors_path = os.path.join(self.folder, "vectors.npy")
+        self.metadata_path = os.path.join(self.folder, "metadatas.json")
+        self.embed_model = embed_model or SentenceTransformer(EMBED_MODEL_NAME)
+        self._load()
 
-def build_vector_store(
-    docs: List[Document],
-    embedding_model_name: str = "all-MiniLM-L6-v2",
-    persist_directory: str = "faiss_db"
-) -> FAISS:
-    """Create or update FAISS vector store from documents, and persist to disk."""
-    embed = SentenceTransformerEmbeddings(model_name=embedding_model_name)
-    os.makedirs(persist_directory, exist_ok=True)
+    def _load(self):
+        if os.path.exists(self.vectors_path) and os.path.exists(self.metadata_path):
+            try:
+                self.vectors = np.load(self.vectors_path)
+                with open(self.metadata_path, "r", encoding="utf-8") as f:
+                    self.metadatas = json.load(f)
+            except Exception:
+                self.vectors = np.empty((0, self.embed_model.get_sentence_embedding_dimension()))
+                self.metadatas = []
+        else:
+            self.vectors = np.empty((0, self.embed_model.get_sentence_embedding_dimension()))
+            self.metadatas = []
 
-    # Try to load an existing DB and append
-    try:
-        if os.listdir(persist_directory):
-            db = FAISS.load_local(persist_directory, embed, allow_dangerous_deserialization=True)
-            if docs:
-                db.add_documents(docs)
-                db.save_local(persist_directory)
-            return db
-    except Exception:
-        # Fall through to creating a fresh DB
-        pass
+        # build NN if data exists
+        self._build_index()
 
-    if not docs:
-        raise ValueError("No documents provided to build the vector store.")
+    def _build_index(self):
+        if self.vectors.shape[0] > 0:
+            self.nn = NearestNeighbors(n_neighbors=5, metric="cosine")
+            self.nn.fit(self.vectors)
+        else:
+            self.nn = None
 
-    db = FAISS.from_documents(docs, embedding=embed)
-    db.save_local(persist_directory)
-    return db
+    def add_documents(self, docs: List[Document]):
+        texts = [d.page_content for d in docs]
+        metas = [d.metadata for d in docs]
+        if not texts:
+            return
+        new_vecs = self.embed_model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+        if self.vectors.shape[0] == 0:
+            self.vectors = new_vecs
+            self.metadatas = metas
+        else:
+            self.vectors = np.vstack([self.vectors, new_vecs])
+            self.metadatas.extend(metas)
+        # persist
+        np.save(self.vectors_path, self.vectors)
+        with open(self.metadata_path, "w", encoding="utf-8") as f:
+            json.dump(self.metadatas, f, ensure_ascii=False, indent=2)
+        self._build_index()
 
+    def get_top_k_documents(self, query: str, k: int = 5) -> List[Document]:
+        if self.nn is None:
+            return []
+        qvec = self.embed_model.encode([query], convert_to_numpy=True)[0]
+        distances, idxs = self.nn.kneighbors([qvec], n_neighbors=min(k, self.vectors.shape[0]))
+        idxs = idxs[0].tolist()
+        docs = []
+        for i in idxs:
+            meta = self.metadatas[i]
+            content = meta.get("_text_preview", "")  # stored preview
+            docs.append(Document(page_content=content, metadata=meta))
+        return docs
 
-def load_retriever_if_exists(
-    persist_directory: str = "faiss_db",
-    embedding_model_name: str = "all-MiniLM-L6-v2",
-    k: int = 5
-) -> Tuple[object, FAISS]:
-    """Load a retriever from an on-disk FAISS DB if it exists."""
-    embed = SentenceTransformerEmbeddings(model_name=embedding_model_name)
-    if os.path.exists(persist_directory) and os.listdir(persist_directory):
+    def clear(self):
+        # remove files
         try:
-            db = FAISS.load_local(persist_directory, embed, allow_dangerous_deserialization=True)
-            return db.as_retriever(search_kwargs={"k": k}), db
+            if os.path.exists(self.vectors_path):
+                os.remove(self.vectors_path)
+            if os.path.exists(self.metadata_path):
+                os.remove(self.metadata_path)
         except Exception:
-            return None, None
-    return None, None
+            pass
+        self.vectors = np.empty((0, self.embed_model.get_sentence_embedding_dimension()))
+        self.metadatas = []
+        self._build_index()
 
+# A simple LangChain-style retriever wrapper that exposes get_relevant_documents
+class SimpleRetriever:
+    def __init__(self, db: NumpyVectorDB, k: int = 5):
+        self.db = db
+        self.k = k
+
+    def get_relevant_documents(self, query: str) -> List[Document]:
+        return self.db.get_top_k_documents(query, k=self.k)
 
 # ---------- Streamlit UI ----------
-
-st.set_page_config(page_title="PDF QnA — Groq API", layout="wide")
-st.title("📚 PDF QnA — Streamlit (Groq API, multi-PDF, vector DB, conversation)")
+st.set_page_config(page_title="PDF QnA (light)", layout="wide")
+st.title("📚 PDF QnA — Streamlit (lightweight vector DB)")
 
 st.sidebar.header("Settings")
-
-# Note: Prefer env var if present; allow override via sidebar.
-side_api_key = st.sidebar.text_input("Groq API Key (put here or set env GROQ_API_KEY)", type="password")
-env_api_key = os.environ.get("GROQ_API_KEY", "")
-groq_api_key = side_api_key.strip() or env_api_key.strip()
-
+side_api_key = st.sidebar.text_input("Groq API Key (or set env GROQ_API_KEY)", type="password")
 if side_api_key:
-    os.environ["GROQ_API_KEY"] = side_api_key  # keep ChatGroq happy during the session
+    os.environ["GROQ_API_KEY"] = side_api_key
+groq_api_key = os.environ.get("GROQ_API_KEY", "")
 
-# Groq: updated, non-deprecated model names
-MODEL_OPTIONS = [
-    "llama-3.1-8b-instant",     # fast, inexpensive
-    "llama-3.1-70b-versatile",  # stronger, bigger context
-    "mixtral-8x7b-32768"        # mixture-of-experts, large context
-]
-model_label = st.sidebar.selectbox("LLM Model", MODEL_OPTIONS, index=0)
-
+model_label = st.sidebar.selectbox("LLM Model", ["llama-3.1-8b-instant", "llama-3.1-70b-versatile"], index=0)
 chunk_size = st.sidebar.number_input("Chunk size", min_value=200, max_value=4000, value=1000, step=100)
 overlap = st.sidebar.number_input("Chunk overlap", min_value=0, max_value=1000, value=200, step=10)
-embedding_model = st.sidebar.text_input("Sentence-Transformers model", value="all-MiniLM-L6-v2")
-faiss_folder = st.sidebar.text_input("Vector DB folder", value="faiss_db")
+faiss_folder = st.sidebar.text_input("Vector DB folder (np store)", value=DEFAULT_DB_FOLDER)
 search_k = st.sidebar.number_input("Retriever top_k", min_value=1, max_value=20, value=5)
-show_sources = st.sidebar.checkbox("Show source snippets", value=True)
-
 st.sidebar.markdown("---")
 if OCR_AVAILABLE:
-    st.sidebar.success("OCR (pdf2image + pytesseract) available")
+    st.sidebar.success("OCR available")
 else:
-    st.sidebar.info("OCR not available. Scanned PDFs need Poppler + Tesseract installed.")
+    st.sidebar.info("OCR not available. For scanned PDFs install poppler + tesseract and include packages.txt")
 
 st.markdown("### 1) Upload PDFs and build/update vector DB")
 uploaded_files = st.file_uploader("Upload one or more PDFs", accept_multiple_files=True, type=["pdf"])
-build_button = st.button("Build / Update DB from uploaded PDFs", type="primary")
+build_button = st.button("Build / Update DB from uploaded PDFs")
 
 st.markdown("### Vector DB status")
-if os.path.exists(faiss_folder) and os.listdir(faiss_folder):
+if os.path.exists(faiss_folder) and os.path.exists(os.path.join(faiss_folder, "vectors.npy")):
     st.success(f"Found existing vector DB in '{faiss_folder}'.")
 else:
     st.info("No vector DB found. Upload PDFs and click 'Build / Update DB' to create one.")
@@ -180,13 +202,13 @@ st.markdown("### 2) Chat with your documents")
 question = st.text_input("Ask a question from uploaded PDFs")
 ask_button = st.button("Ask")
 
-# Session state
+# session
 if "chat_history" not in st.session_state:
     st.session_state["chat_history"] = []
 if "chat_id" not in st.session_state:
     st.session_state["chat_id"] = str(uuid.uuid4())
 
-# ---------- Build step ----------
+# Build step
 if build_button:
     if not uploaded_files:
         st.warning("Please upload at least one PDF.")
@@ -200,36 +222,39 @@ if build_button:
                 except Exception as e:
                     st.error(f"Failed to read {f.name}: {e}")
                     continue
-
                 if not text.strip():
-                    st.warning(f"No text extracted from {f.name}. If it's scanned, enable OCR (install poppler + tesseract).")
+                    st.warning(f"No text extracted from {f.name}.")
                     continue
-
                 splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
                 chunks = splitter.split_text(text)
                 for i, chunk in enumerate(chunks):
-                    meta = {"source": f.name, "chunk": i}
+                    meta = {"source": f.name, "chunk": i, "_text_preview": chunk}
                     all_texts.append(chunk)
                     metadatas.append(meta)
-
             if not all_texts:
                 st.error("No text extracted from uploaded PDFs.")
             else:
                 docs = docs_from_texts(all_texts, metadatas)
                 try:
-                    _db = build_vector_store(docs, embedding_model_name=embedding_model, persist_directory=faiss_folder)
+                    embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+                    db = NumpyVectorDB(folder=faiss_folder, embed_model=embed_model)
+                    db.add_documents(docs)
                     st.success(f"Vector DB built/updated with {len(all_texts)} chunks and saved in '{faiss_folder}'.")
                 except Exception as e:
                     st.error(f"Failed building vector DB: {e}")
 
-# ---------- Retrieval / Chat ----------
-retriever, db = load_retriever_if_exists(
-    persist_directory=faiss_folder,
-    embedding_model_name=embedding_model,
-    k=search_k
-)
+# Load retriever if exists
+embed_model = None
+if os.path.exists(faiss_folder):
+    try:
+        embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+        db = NumpyVectorDB(folder=faiss_folder, embed_model=embed_model)
+        retriever = SimpleRetriever(db=db, k=search_k)
+    except Exception:
+        retriever = None
+else:
+    retriever = None
 
-# Right-side tools
 cols = st.columns([3, 1])
 with cols[1]:
     if st.button("Clear chat history"):
@@ -240,18 +265,16 @@ with cols[1]:
             try:
                 shutil.rmtree(faiss_folder)
                 st.success("Vector DB deleted.")
+                retriever = None
             except Exception as e:
                 st.error(f"Error deleting DB: {e}")
 
-# Guard rails around API key / retriever
 if retriever is None:
     st.info("No vector DB available yet. Build DB first.")
 elif not groq_api_key:
-    st.warning("Enter your Groq API key (in sidebar) or set the GROQ_API_KEY environment variable.")
+    st.warning("Enter your Groq API key in sidebar or set env GROQ_API_KEY.")
 else:
-    # Init memory + LLM
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-
     try:
         llm = ChatGroq(api_key=groq_api_key, model=model_label, temperature=0.0)
     except Exception as e:
@@ -259,50 +282,33 @@ else:
         llm = None
 
     if llm:
-        chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=retriever,
-            memory=memory,
-            return_source_documents=True
-        )
-
+        # Build a LangChain-style chain that uses our retriever
+        chain = ConversationalRetrievalChain.from_llm(llm=llm, retriever=retriever, memory=memory, return_source_documents=True)
         if ask_button and question:
             with st.spinner("Searching and generating answer..."):
                 try:
                     result = chain({"question": question})
-                    # ConversationalRetrievalChain returns a dict with "answer", "source_documents", "chat_history" etc.
                     answer = result.get("answer") if isinstance(result, dict) else str(result)
                     sources = result.get("source_documents") or []
-
-                    # Prepare a compact sources block
+                    # Build concise source block
                     source_block = ""
-                    if show_sources and sources:
-                        added = 0
+                    if sources:
                         source_block += "\n\n**Sources:**\n"
-                        for d in sources:
+                        for d in sources[:5]:
                             src = d.metadata.get("source", "unknown")
                             chunk_id = d.metadata.get("chunk", "?")
                             snippet = (d.page_content or "").strip().replace("\n", " ")
                             snippet = (snippet[:220] + "…") if len(snippet) > 220 else snippet
                             source_block += f"- *{src}* (chunk {chunk_id}): {snippet}\n"
-                            added += 1
-                            if added >= 5:
-                                break
-
                     full_answer = answer + source_block
                     st.session_state["chat_history"].append({"question": question, "answer": full_answer})
                 except Exception as e:
-                    # Handle decommissioned / invalid model messages gracefully
                     msg = str(e)
-                    if "model_decommissioned" in msg or "decommissioned" in msg or "no longer supported" in msg:
-                        st.error(
-                            "This model is deprecated. Please switch to a supported model like "
-                            "`llama-3.1-8b-instant` or `llama-3.1-70b-versatile` from the sidebar."
-                        )
+                    if "decommissioned" in msg or "model_decommissioned" in msg:
+                        st.error("This model is deprecated. Switch to another model in sidebar.")
                     else:
                         st.error(f"Error during retrieval/LLM call: {e}")
 
-        # Render chat
         st.markdown("#### Chat history")
         if not st.session_state["chat_history"]:
             st.info("No messages yet. Ask something above.")
@@ -312,7 +318,6 @@ else:
                 st.markdown(f"**A:** {qa['answer']}")
                 st.markdown("---")
 
-        # Sidebar tools
         with st.sidebar:
             st.markdown("### Tools")
             if st.button("Show DB files"):
@@ -330,17 +335,11 @@ else:
                     for item in st.session_state["chat_history"]:
                         txt += "Q: " + item["question"] + "\n"
                         txt += "A: " + item["answer"] + "\n\n"
-                    st.download_button(
-                        label="Download chat",
-                        data=txt,
-                        file_name="pdf_qna_chat.txt",
-                        mime="text/plain"
-                    )
+                    st.download_button(label="Download chat", data=txt, file_name="pdf_qna_chat.txt", mime="text/plain")
 
 st.markdown("---")
 st.markdown(
     "**Notes:**\n"
-    "- For scanned PDFs you need `poppler` and `tesseract` installed. On Ubuntu/Debian: `sudo apt-get install poppler-utils tesseract-ocr`.\n"
-    "- On some cloud hosts, OCR may not work because system deps are missing.\n"
-    "- Add your `GROQ_API_KEY` in Streamlit Secrets or in the sidebar."
+    "- For scanned PDFs you need `poppler-utils` and `tesseract-ocr` installed on the host (add packages.txt for Streamlit Cloud).\n"
+    "- Add your `GROQ_API_KEY` in the sidebar or as an environment variable."
 )
