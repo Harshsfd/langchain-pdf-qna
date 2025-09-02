@@ -111,12 +111,7 @@ This project is licensed under the MIT License.
 
 Harsh Bhardwaj
 
-📧 harshbhardwajsfd@gmail.com
-
-🌐 Portfolio
-
-💼 LinkedIn
-
-🐙 GitHub
-
-
+📧 Email: harshbhardwajsfd@gmail.com
+🌐 Portfolio: harshbhardwaj-portfolio.vercel.app
+💼 LinkedIn: linkedin.com/in/harshsfd
+🐙 GitHub: github.com/Harshsfd
